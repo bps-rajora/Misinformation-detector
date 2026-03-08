@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Streamlit
+.streamlit/
+
+# Models & Large Files (Optional - keep if you want them on GitHub)
+# *.pth 
+# *.tflite
+# *.task
+
+# Media & Temp
+tmp*
+*.mp4
+*.wav
+*.mp3
+*.jpg
+*.png
+*.jpeg
+.DS_Store

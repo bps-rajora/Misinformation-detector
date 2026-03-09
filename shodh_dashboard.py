@@ -16,7 +16,8 @@ import tempfile
 import gc
 
 # --- CONFIGURATION ---
-ST_DEVICE = "cpu"
+ST_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+USE_HALF = torch.cuda.is_available()  # float16 only on GPU (slower on CPU)
 
 # --- LAZY MODEL LOADERS (load only when needed, not all at once) ---
 
@@ -37,7 +38,8 @@ def load_deepfake_model():
             state_dict = torch.load(weights_path, map_location=ST_DEVICE)
             new_state_dict = {k.replace("base_model.", ""): v for k, v in state_dict.items()}
             model.load_state_dict(new_state_dict)
-            model.half()  # Convert to float16 — halves memory usage
+            if USE_HALF:
+                model.half()
             model.eval().to(ST_DEVICE)
             return model, True
         return None, False
@@ -99,7 +101,8 @@ def preprocess_face(face_img):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
     pil_img = Image.fromarray(cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
-    return preprocess(pil_img).unsqueeze(0).to(ST_DEVICE).half()  # float16
+    t = preprocess(pil_img).unsqueeze(0).to(ST_DEVICE)
+    return t.half() if USE_HALF else t
 
 def analyze_visual(frame, model, face_detector):
     """Detect faces in a frame and classify each as real/fake."""
@@ -129,12 +132,12 @@ def analyze_visual(frame, model, face_detector):
 
 st.set_page_config(page_title="Shodh AI - Unified Verifier", layout="wide", page_icon="🛡️")
 st.title("🛡️ Shodh AI: All-in-One Verifier")
-st.markdown("Upload any **Video**, **Audio**, or **Image** to scan for Deepfakes and Fact-Check claims.")
+st.markdown("Upload any **Video**, **Audio** to scan for Deepfakes and Fact-Check claims.")
 
 # Unified Uploader
 uploaded_file = st.file_uploader(
     "Drop your media here",
-    type=["mp4", "wav", "mp3", "jpg", "png", "jpeg", "avi", "mkv", "webm", "ogg", "flac"]
+    type=["mp4", "wav", "mp3", "avi", "mkv", "webm", "ogg", "flac"]
 )
 
 # Only load models on demand, show status in sidebar
@@ -175,23 +178,28 @@ if uploaded_file:
                 with st.spinner("🔍 Loading Visual AI & Analyzing..."):
                     df_model, df_ok = load_deepfake_model()
                     if df_ok:
+                        face_det = get_face_detector()
                         if file_type == 'image':
                             img = cv2.imread(tmp_path)
                             if img is not None:
-                                vis_score = analyze_visual(img, df_model, get_face_detector())
+                                vis_score = analyze_visual(img, df_model, face_det)
                         else:
                             cap = cv2.VideoCapture(tmp_path)
                             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                             frame_scores = []
-                            sample_count = min(5, total)  # Reduced samples for memory
-                            for i in range(0, total, max(1, total // sample_count)):
+                            sample_count = min(3, total)  # 3 frames is enough for a quick scan
+                            progress = st.progress(0, text="Scanning video frames...")
+                            indices = [int(i) for i in np.linspace(0, total - 1, sample_count)]
+                            for idx, i in enumerate(indices):
                                 cap.set(cv2.CAP_PROP_POS_FRAMES, i)
                                 ret, frame = cap.read()
                                 if ret:
-                                    s = analyze_visual(frame, df_model, get_face_detector())
+                                    s = analyze_visual(frame, df_model, face_det)
                                     if s is not None:
                                         frame_scores.append(s)
+                                progress.progress((idx + 1) / len(indices), text=f"Frame {idx+1}/{len(indices)}")
                             cap.release()
+                            progress.empty()
                             vis_score = np.mean(frame_scores) if frame_scores else None
                     gc.collect()
 
